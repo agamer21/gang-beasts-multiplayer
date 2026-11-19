@@ -48,3 +48,35 @@ jobs:
           }
           main().catch(error => { console.error('::error::' + error.message.replace(/\n/g, ' ')); process.exitCode = 1; });
           JS
+      - name: Check the arcade lobby in Chrome
+        run: |
+          npm install --no-save --package-lock=false playwright-core
+          node <<'JS'
+          const { chromium } = require('playwright-core');
+          (async () => {
+            const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
+            try {
+              const host = await browser.newPage();
+              const guest = await browser.newPage();
+              for (const page of [host, guest]) {
+                page.on('pageerror', error => console.log('Page error:', error.message));
+                page.on('console', line => { if (line.type() === 'error') console.log('Browser:', line.text()); });
+                page.on('requestfailed', request => console.log('Request failed:', request.url(), request.failure()?.errorText));
+                await page.goto('https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/', { waitUntil: 'domcontentloaded' });
+              }
+              await host.getByRole('button', { name: 'Host room' }).click();
+              await host.getByText('Share the room code').waitFor({ timeout: 85000 }).catch(async () => {
+                throw new Error('Host room failed: ' + await host.locator('#status').innerText());
+              });
+              console.log('Published lobby created a room');
+              await guest.getByLabel('Room code').fill(await host.locator('#code').innerText());
+              await guest.getByRole('button', { name: 'Join room' }).click();
+              await host.getByRole('button', { name: 'Start match' }).waitFor({ timeout: 55000 }).catch(async () => {
+                throw new Error('Join room failed: ' + await guest.locator('#status').innerText());
+              });
+              console.log('Second browser joined the published room');
+            } finally {
+              await browser.close();
+            }
+          })().catch(error => { console.error('::error::' + error.message.replace(/\n/g, ' ')); process.exitCode = 1; });
+          JS
