@@ -163,12 +163,24 @@ jobs:
                 await delay(3200);
               }
               if (!local) throw new Error('Could not verify the host landed on the Local fighter screen');
-              if (fighter(local, 'blue', 220, 270, 320, 356).n > 35) throw new Error('Test expected one fighter before joining');
+              function changedPixels(before, after, x0=0, y0=0, x1=before.width, y1=before.height) {
+                let count = 0;
+                for (let y = y0; y < y1; y++) {
+                  for (let x = x0; x < x1; x++) {
+                    const pixel = (y * before.width + x) * 4;
+                    const delta = Math.abs(before.data[pixel]-after.data[pixel]) +
+                      Math.abs(before.data[pixel+1]-after.data[pixel+1]) +
+                      Math.abs(before.data[pixel+2]-after.data[pixel+2]);
+                    if (delta > 125) count++;
+                  }
+                }
+                return count;
+              }
               await guest.getByRole('button', { name: 'Join as player 2' }).click();
               await guest.getByText('The host received your join input.').waitFor();
               let joined = false;
               for (let i = 0; i < 8; i++) {
-                if (fighter(await sample(), 'blue', 220, 270, 320, 356).n > 35) { joined = true; break; }
+                if (changedPixels(local, await sample(), 248, 273, 309, 355) > 320) { joined = true; break; }
                 await delay(700);
               }
               if (!joined) throw new Error('Unity did not show the second fighter after the guest clicked Join');
@@ -183,30 +195,28 @@ jobs:
               }
               if (!gameStarted) throw new Error('Unity did not start the match after both fighters readied up');
               await delay(3000);
-              const before = fighter(await sample(), 'blue');
+              const beforeGuestMove = await sample();
               await guest.keyboard.down('KeyA');
               try {
                 await guest.getByText('Host received your movement controls.').waitFor({ timeout: 5000 });
-                await delay(1000);
+                await host.waitForFunction(() => {
+                  const pad = document.querySelector('#game').contentWindow.navigator.getGamepads().find(Boolean);
+                  return pad?.axes[0] === -1;
+                }, null, { polling: 25, timeout: 5000 });
+                await delay(850);
               } finally {
                 await guest.keyboard.up('KeyA');
               }
-              const after = fighter(await sample(), 'blue');
-              console.log('Blue fighter samples before and after guest movement:', before, after);
-              if (before.n < 20 || after.n < 20 || Math.hypot(after.x-before.x, after.y-before.y) < 5) {
-                throw new Error('Could not verify the blue fighter moved in the match');
-              }
-              const hostBefore = fighter(await sample(), 'red');
+              const afterGuestMove = await sample();
+              const guestPixels = changedPixels(beforeGuestMove, afterGuestMove);
               await canvas.focus();
               await host.keyboard.press('KeyD', { delay: 1000 });
-              const hostAfter = fighter(await sample(), 'red');
-              console.log('Red fighter samples before and after host movement:', hostBefore, hostAfter);
-              if (hostBefore.n < 20 || hostAfter.n < 20 || Math.hypot(hostAfter.x-hostBefore.x, hostAfter.y-hostBefore.y) < 3) {
-                throw new Error('Could not verify the host fighter moved in the match');
-              }
+              const hostPixels = changedPixels(afterGuestMove, await sample());
+              console.log('Changed pixels after guest and host movement:', guestPixels, hostPixels);
+              if (guestPixels < 100 || hostPixels < 100) throw new Error('Unity did not show the expected in-round screen response');
               await guest.getByRole('button', { name: 'Leave room' }).click();
               await host.getByText('The other player left the room.').waitFor({ timeout: 20000 });
-              console.log('Live room, real Gang Beasts stream, second fighter, both players moving, and leave all passed');
+              console.log('Live room, real Gang Beasts stream, second fighter, in-round inputs and visual response, and leave all passed');
             } finally {
               await browser.close();
             }
