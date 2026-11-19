@@ -137,7 +137,18 @@ jobs:
               console.log('The real Unity canvas is streaming to the guest');
               await host.bringToFront();
               await canvas.focus();
-              const sample = async () => PNG.sync.read(await canvas.screenshot({ timeout: 18000 }));
+              const sample = async () => {
+                const source = PNG.sync.read(await canvas.screenshot({ timeout: 18000 }));
+                const image = new PNG({ width: 640, height: 360 });
+                for (let y = 0; y < image.height; y++) {
+                  for (let x = 0; x < image.width; x++) {
+                    const from = (Math.floor(y*source.height/image.height)*source.width + Math.floor(x*source.width/image.width))*4;
+                    const to = (y*image.width+x)*4;
+                    source.data.copy(image.data, to, from, from+4);
+                  }
+                }
+                return image;
+              };
               const localColors = [[236,188,148],[241,165,112],[198,127,90],[170,120,93],[176,124,94],[202,149,103],[195,156,98],[161,130,98],[241,161,106],[245,171,117],[174,120,88],[159,117,91],[183,131,99],[199,149,103],[227,182,129],[223,175,122],[241,167,113],[245,174,120],[211,145,105],[158,117,90],[164,122,92],[223,167,114],[216,175,127],[196,156,111],[241,190,149],[245,195,154],[223,179,148],[127,137,138],[128,133,130],[224,169,115],[222,181,130],[210,169,121],[241,202,166],[245,208,174],[232,192,159],[183,154,129],[168,117,96],[221,165,112],[223,183,135],[212,173,125],[207,171,136],[244,204,170],[198,163,134],[191,160,134],[176,102,70],[177,137,103],[213,175,107],[198,165,120]];
               function localDistance(image) {
                 let distance = 0;
