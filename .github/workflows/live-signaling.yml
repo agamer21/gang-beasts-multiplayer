@@ -7,7 +7,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 7
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -48,7 +48,17 @@ jobs:
           }
           main().catch(error => { console.error('::error::' + error.message.replace(/\n/g, ' ')); process.exitCode = 1; });
           JS
-      - name: Check the arcade lobby in Chrome
+      - name: Wait for the updated lobby
+        run: |
+          for attempt in $(seq 1 24); do
+            if curl -fsS --max-time 12 "https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/?check=$attempt" | grep -q 'room-connect-2'; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo '::error::Updated lobby did not appear on GitHub Pages'
+          exit 1
+      - name: Check the updated arcade lobby in Chrome
         run: |
           npm install --no-save --package-lock=false playwright-core
           node <<'JS'
@@ -64,7 +74,15 @@ jobs:
                 page.on('requestfailed', request => console.log('Request failed:', request.url(), request.failure()?.errorText));
                 await page.goto('https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/', { waitUntil: 'domcontentloaded' });
               }
+              let releaseProbe;
+              const probeGate = new Promise(resolve => { releaseProbe = resolve; });
+              await host.route('https://gang-beasts-multiplayer.onrender.com/signal/peerjs/id', async route => {
+                await probeGate;
+                await route.continue();
+              });
               await host.getByRole('button', { name: 'Host room' }).click();
+              if (await host.locator('#room-code').isVisible()) throw new Error('Code appeared before server confirmation');
+              releaseProbe();
               await host.getByText('Share the room code').waitFor({ timeout: 85000 }).catch(async () => {
                 throw new Error('Host room failed: ' + await host.locator('#status').innerText());
               });
