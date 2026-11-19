@@ -1,0 +1,12 @@
+{
+  "name": "gang-beasts-multiplayer",
+  "version": "1.0.0",
+  "private": true,
+  "engines": { "node": "24.x" },
+  "scripts": { "start": "node server.cjs" },
+  "dependencies": {
+    "express": "4.22.3",
+    "peer": "1.0.2",
+    "ws": "8.23.0"
+  }
+}
