@@ -7,7 +7,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -66,7 +66,7 @@ jobs:
       - name: Wait for the updated lobby
         run: |
           for attempt in $(seq 1 24); do
-            if curl -fsS --max-time 12 "https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/?check=$attempt" | grep -q 'guest-input-2'; then
+            if curl -fsS --max-time 12 "https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/?check=join-confirm-3-$attempt" | grep -q 'join-confirm-3'; then
               exit 0
             fi
             sleep 10
@@ -75,15 +75,18 @@ jobs:
           exit 1
       - name: Check the updated arcade lobby in Chrome
         run: |
-          npm install --no-save --package-lock=false playwright-core
+          npm install --no-save --package-lock=false playwright-core pngjs
           node <<'JS'
           const { chromium } = require('playwright-core');
+          const { PNG } = require('pngjs');
           (async () => {
-            const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
+            const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
             try {
               const diagnostic = [];
               const host = await browser.newPage();
               const guest = await browser.newPage();
+              let gameStarted = false;
+              host.on('console', line => { if (line.text().includes('[SPW] AddPlayer: Added')) gameStarted = true; });
               for (const page of [host, guest]) {
                 await page.addInitScript(() => {
                   window.WebSocket = function () { throw new Error('Browser WebSockets are disabled for this test'); };
@@ -96,7 +99,7 @@ jobs:
                   if (response.url().includes('/rooms/') && !response.ok()) diagnostic.push(response.status() + ' ' + response.url());
                 });
                 page.on('requestfailed', request => console.log('Request failed:', request.url(), request.failure()?.errorText));
-                await page.goto('https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/?v=guest-input-2', { waitUntil: 'domcontentloaded' });
+                await page.goto('https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/?v=join-confirm-3', { waitUntil: 'domcontentloaded' });
               }
               let releaseProbe;
               const probeGate = new Promise(resolve => { releaseProbe = resolve; });
@@ -117,31 +120,93 @@ jobs:
                 throw new Error('Join room failed: ' + await guest.locator('#status').innerText() + ' | ' + diagnostic.join(' | '));
               });
               console.log('Second browser joined the published room with WebSockets disabled');
-              await host.route('**/ports/gang-beasts/?remote-play=*', route => route.fulfill({
-                contentType: 'text/html',
-                body: '<canvas id="unity-canvas" tabindex="0" width="320" height="180"></canvas>' +
-                  '<script src="remote-controller.js?v=join-1"></script>' +
-                  '<script>const canvas = document.querySelector("canvas"); const ctx = canvas.getContext("2d");' +
-                  'setInterval(() => { ctx.fillStyle = Date.now() % 2 ? "blue" : "orange"; ctx.fillRect(0, 0, 320, 180); }, 80);</script>'
-              }));
+              await host.route('**/ports/gang-beasts/?remote-play=*', async route => {
+                const response = await route.fetch();
+                const body = (await response.text()).replaceAll('devicePixelRatio: 1', 'devicePixelRatio: 0.55');
+                await route.fulfill({ response, body });
+              });
+              await host.locator('#game').evaluate(game => { game.style.width = '640px'; game.style.height = '400px'; });
               await host.getByRole('button', { name: 'Start match' }).click();
-              await guest.getByRole('button', { name: 'Join as player 2' }).click({ timeout: 25000 });
-              await guest.waitForFunction(() => document.querySelector('video').videoWidth > 0);
-              await guest.getByRole('button', { name: 'Copy code' }).focus();
-              const axes = (x, y) => host.waitForFunction(([x, y]) => {
-                const pad = document.querySelector('#game').contentWindow.navigator.getGamepads().find(Boolean);
-                return pad?.axes[0] === x && pad?.axes[1] === y;
-              }, [x, y], { polling: 30, timeout: 5000 });
-              await guest.keyboard.down('KeyW');
-              await axes(0, -1);
-              await guest.getByText('Host received your movement controls.').waitFor();
-              await guest.keyboard.up('KeyW');
-              await axes(0, 0);
-              await guest.keyboard.down('ArrowRight');
-              await axes(1, 0);
-              await guest.keyboard.up('ArrowRight');
-              await axes(0, 0);
-              console.log('Live video and guest WASD and arrow input reached the host controller with toolbar focus');
+              await guest.getByRole('button', { name: 'Join as player 2' }).waitFor({ timeout: 25000 });
+              const frame = host.frameLocator('#game');
+              const canvas = frame.locator('canvas');
+              await frame.locator('#unity-loading-bar').waitFor({ state: 'hidden', timeout: 150000 });
+              await guest.waitForFunction(() => document.querySelector('video').videoWidth > 0, null, { timeout: 90000 });
+              console.log('The real Unity canvas is streaming to the guest');
+              await host.bringToFront();
+              await canvas.focus();
+              const sample = async () => PNG.sync.read(await canvas.screenshot({ timeout: 18000 }));
+              function fighter(image, color, x0=0, y0=0, x1=image.width, y1=image.height) {
+                let n = 0, sx = 0, sy = 0;
+                for (let y = y0; y < Math.min(y1, image.height); y++) {
+                  for (let x = x0; x < Math.min(x1, image.width); x++) {
+                    const i = (y * image.width + x) * 4;
+                    const [r,g,b] = image.data.subarray(i, i + 3);
+                    const match = color === 'red' ? r > 145 && g < .42*r && b < .4*r :
+                      color === 'blue' ? b > 145 && r < .38*b && g > .58*b && g < .88*b :
+                      r > 190 && g > 150 && b < 70;
+                    if (match) { n++; sx += x; sy += y; }
+                  }
+                }
+                return { n, x: sx/n, y: sy/n };
+              }
+              const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+              let local;
+              for (let i = 0; i < 18; i++) {
+                const image = await sample();
+                if (fighter(image, 'red', 335, 275, 414, 356).n > 250 &&
+                    fighter(image, 'yellow', 490, 334, 635, 357).n > 30) {
+                  local = image;
+                  break;
+                }
+                await host.keyboard.press('Space', { delay: 320 });
+                await delay(3200);
+              }
+              if (!local) throw new Error('Could not verify the host landed on the Local fighter screen');
+              if (fighter(local, 'blue', 220, 270, 320, 356).n > 35) throw new Error('Test expected one fighter before joining');
+              await guest.getByRole('button', { name: 'Join as player 2' }).click();
+              await guest.getByText('The host received your join input.').waitFor();
+              let joined = false;
+              for (let i = 0; i < 8; i++) {
+                if (fighter(await sample(), 'blue', 220, 270, 320, 356).n > 35) { joined = true; break; }
+                await delay(700);
+              }
+              if (!joined) throw new Error('Unity did not show the second fighter after the guest clicked Join');
+              console.log('Second fighter appeared in the real Unity Local lobby before the host readied up');
+              await canvas.focus();
+              await host.keyboard.press('Space', { delay: 300 });
+              await guest.keyboard.press('Space', { delay: 450 });
+              await delay(2000);
+              for (let i = 0; !gameStarted && i < 5; i++) {
+                await host.keyboard.press('Space', { delay: 300 });
+                await delay(1700);
+              }
+              if (!gameStarted) throw new Error('Unity did not start the match after both fighters readied up');
+              await delay(3000);
+              const before = fighter(await sample(), 'blue');
+              await guest.keyboard.down('KeyA');
+              try {
+                await guest.getByText('Host received your movement controls.').waitFor({ timeout: 5000 });
+                await delay(1000);
+              } finally {
+                await guest.keyboard.up('KeyA');
+              }
+              const after = fighter(await sample(), 'blue');
+              console.log('Blue fighter samples before and after guest movement:', before, after);
+              if (before.n < 20 || after.n < 20 || Math.hypot(after.x-before.x, after.y-before.y) < 5) {
+                throw new Error('Could not verify the blue fighter moved in the match');
+              }
+              const hostBefore = fighter(await sample(), 'red');
+              await canvas.focus();
+              await host.keyboard.press('KeyD', { delay: 1000 });
+              const hostAfter = fighter(await sample(), 'red');
+              console.log('Red fighter samples before and after host movement:', hostBefore, hostAfter);
+              if (hostBefore.n < 20 || hostAfter.n < 20 || Math.hypot(hostAfter.x-hostBefore.x, hostAfter.y-hostBefore.y) < 3) {
+                throw new Error('Could not verify the host fighter moved in the match');
+              }
+              await guest.getByRole('button', { name: 'Leave room' }).click();
+              await host.getByText('The other player left the room.').waitFor({ timeout: 20000 });
+              console.log('Live room, real Gang Beasts stream, second fighter, both players moving, and leave all passed');
             } finally {
               await browser.close();
             }
