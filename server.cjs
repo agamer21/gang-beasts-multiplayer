@@ -2,6 +2,7 @@ const http = require('node:http');
 const express = require('express');
 const { ExpressPeerServer } = require('peer');
 const { WebSocketServer } = require('ws');
+const { httpsSignaling } = require('./https-signaling.cjs');
 
 const port = Number(process.env.PORT || 10000);
 const arcadeOrigin = process.env.ARCADE_ORIGIN || 'https://agamer21.github.io';
@@ -21,5 +22,7 @@ app.use('/signal', ExpressPeerServer(server, {
     verifyClient: ({ origin }) => origin === arcadeOrigin
   })
 }));
+
+app.use('/rooms', httpsSignaling({ port, arcadeOrigin }));
 
 server.listen(port, '0.0.0.0', () => console.log('Room signaling server listening on port', port));
