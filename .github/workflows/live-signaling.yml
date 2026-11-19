@@ -80,11 +80,13 @@ jobs:
           const { chromium } = require('playwright-core');
           const { PNG } = require('pngjs');
           (async () => {
-            const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
+            const launch = () => chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
+            const hostBrowser = await launch();
+            const guestBrowser = await launch();
             try {
               const diagnostic = [];
-              const host = await browser.newPage();
-              const guest = await browser.newPage();
+              const host = await hostBrowser.newPage();
+              const guest = await guestBrowser.newPage();
               let gameStarted = false;
               host.on('console', line => { if (line.text().includes('[SPW] AddPlayer: Added')) gameStarted = true; });
               for (const page of [host, guest]) {
@@ -195,11 +197,23 @@ jobs:
               await guest.getByRole('button', { name: 'Join as player 2' }).click();
               await guest.getByText('The host received your join input.').waitFor();
               let joined = false;
-              for (let i = 0; i < 8; i++) {
-                if (changedPixels(local, await sample(), 248, 273, 309, 355) > 320) { joined = true; break; }
+              const joins = [];
+              for (let i = 0; i < 12; i++) {
+                const image = await sample();
+                const diff = changedPixels(local, image, 248, 273, 309, 355);
+                joins.push([localDistance(image).toFixed(1),diff]);
+                if (diff > 320) { joined = true; break; }
                 await delay(700);
               }
-              if (!joined) throw new Error('Unity did not show the second fighter after the guest clicked Join');
+              if (!joined) {
+                const state = await canvas.evaluate(() => ({
+                  focus: document.hasFocus(),
+                  active: document.activeElement?.id,
+                  pad: navigator.getGamepads().some(Boolean)
+                }));
+                throw new Error('Unity did not show the second fighter. Host state ' + JSON.stringify(state) +
+                  ' screenshot distance and changes ' + JSON.stringify(joins) + ' Unity: ' + messages.slice(-8).join(' | '));
+              }
               console.log('Second fighter appeared in the real Unity Local lobby before the host readied up');
               await canvas.focus();
               await hostKeys('Space', { delay: 300 });
@@ -234,7 +248,7 @@ jobs:
               await host.getByText('The other player left the room.').waitFor({ timeout: 20000 });
               console.log('Live room, real Gang Beasts stream, second fighter, in-round inputs and visual response, and leave all passed');
             } finally {
-              await browser.close();
+              await Promise.all([hostBrowser.close(), guestBrowser.close()]);
             }
           })().catch(error => { console.error('::error::' + error.message.replace(/\n/g, ' ')); process.exitCode = 1; });
           JS
