@@ -51,7 +51,7 @@ jobs:
       - name: Wait for the updated lobby
         run: |
           for attempt in $(seq 1 24); do
-            if curl -fsS --max-time 12 "https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/?check=$attempt" | grep -q 'room-connect-2'; then
+            if curl -fsS --max-time 12 "https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/?check=$attempt" | grep -q 'https-rooms-1'; then
               exit 0
             fi
             sleep 10
@@ -69,6 +69,9 @@ jobs:
               const host = await browser.newPage();
               const guest = await browser.newPage();
               for (const page of [host, guest]) {
+                await page.addInitScript(() => {
+                  window.WebSocket = function () { throw new Error('Browser WebSockets are disabled for this test'); };
+                });
                 page.on('pageerror', error => console.log('Page error:', error.message));
                 page.on('console', line => { if (line.type() === 'error') console.log('Browser:', line.text()); });
                 page.on('requestfailed', request => console.log('Request failed:', request.url(), request.failure()?.errorText));
@@ -92,7 +95,7 @@ jobs:
               await host.getByRole('button', { name: 'Start match' }).waitFor({ timeout: 55000 }).catch(async () => {
                 throw new Error('Join room failed: ' + await guest.locator('#status').innerText());
               });
-              console.log('Second browser joined the published room');
+              console.log('Second browser joined the published room with WebSockets disabled');
             } finally {
               await browser.close();
             }
