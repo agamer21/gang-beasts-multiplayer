@@ -1,0 +1,50 @@
+name: Verify live room signaling
+on:
+  push:
+    branches: [verify-live-signaling]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci --omit=dev
+      - name: Check room server from outside Render
+        run: |
+          node <<'JS'
+          const { WebSocket } = require('ws');
+          const { randomUUID } = require('node:crypto');
+          const origin = 'https://agamer21.github.io';
+          const domain = 'gang-beasts-multiplayer.onrender.com';
+          const started = Date.now();
+          async function request(path) {
+            const response = await fetch('https://' + domain + path, { headers: { origin }, signal: AbortSignal.timeout(85000) });
+            console.log(path, 'HTTP', response.status, 'after', Date.now() - started, 'ms');
+            if (!response.ok) throw new Error(path + ' returned HTTP ' + response.status + ' (' + (await response.text()).slice(0,120) + ')');
+            return response;
+          }
+          async function main() {
+            const health = await request('/health');
+            if ((await health.json()).status !== 'ok') throw new Error('Unexpected health response');
+            const id = await request('/signal/peerjs/id');
+            if (id.headers.get('access-control-allow-origin') !== origin) throw new Error('PeerJS ID response has the wrong CORS origin');
+            const url = 'wss://' + domain + ':443/signal/peerjs?key=peerjs&id=arcade-smoke-' + randomUUID() + '&token=' + randomUUID() + '&version=1.5.5';
+            await new Promise((resolve, reject) => {
+              const ws = new WebSocket(url, { origin, handshakeTimeout: 15000 });
+              ws.once('error', reject);
+              ws.once('message', raw => {
+                const { type } = JSON.parse(raw);
+                ws.close();
+                if (type === 'OPEN') resolve();
+                else reject(new Error('WebSocket sent ' + type + ' instead of OPEN'));
+              });
+            });
+            console.log('Live signaling returned OPEN');
+          }
+          main().catch(error => { console.error('::error::' + error.message.replace(/\n/g, ' ')); process.exitCode = 1; });
+          JS
