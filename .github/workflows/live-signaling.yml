@@ -45,6 +45,21 @@ jobs:
               });
             });
             console.log('Live signaling returned OPEN');
+            const sessionId = 'ag-arcade-gang-beasts-' + randomUUID().slice(0, 8);
+            const requestRoom = async (path, headers={}, body) => {
+              const response = await fetch('https://' + domain + '/rooms/' + path, {
+                method: 'POST', headers: { origin, ...headers }, body, signal: AbortSignal.timeout(15000)
+              });
+              const result = await response.text();
+              if (!response.ok) throw new Error('/rooms/' + path + ' HTTP ' + response.status + ' ' + result.slice(0,140));
+              return result;
+            };
+            const { key } = JSON.parse(await requestRoom('open', { 'Content-Type': 'application/json' }, JSON.stringify({ id: sessionId })));
+            const authorization = 'Bearer ' + key;
+            const messages = JSON.parse(await requestRoom('poll', { authorization }));
+            if (!messages.some(raw => JSON.parse(raw).type === 'OPEN')) throw new Error('HTTPS poll did not receive OPEN');
+            await requestRoom('close', { authorization });
+            console.log('HTTPS session returned OPEN');
           }
           main().catch(error => { console.error('::error::' + error.message.replace(/\n/g, ' ')); process.exitCode = 1; });
           JS
@@ -66,6 +81,7 @@ jobs:
           (async () => {
             const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
             try {
+              const diagnostic = [];
               const host = await browser.newPage();
               const guest = await browser.newPage();
               for (const page of [host, guest]) {
@@ -73,7 +89,12 @@ jobs:
                   window.WebSocket = function () { throw new Error('Browser WebSockets are disabled for this test'); };
                 });
                 page.on('pageerror', error => console.log('Page error:', error.message));
-                page.on('console', line => { if (line.type() === 'error') console.log('Browser:', line.text()); });
+                page.on('console', line => {
+                  if (['error', 'warning'].includes(line.type())) diagnostic.push(line.text());
+                });
+                page.on('response', response => {
+                  if (response.url().includes('/rooms/') && !response.ok()) diagnostic.push(response.status() + ' ' + response.url());
+                });
                 page.on('requestfailed', request => console.log('Request failed:', request.url(), request.failure()?.errorText));
                 await page.goto('https://agamer21.github.io/assets/arcade/gang-beasts-multiplayer/', { waitUntil: 'domcontentloaded' });
               }
@@ -87,13 +108,13 @@ jobs:
               if (await host.locator('#room-code').isVisible()) throw new Error('Code appeared before server confirmation');
               releaseProbe();
               await host.getByText('Share the room code').waitFor({ timeout: 85000 }).catch(async () => {
-                throw new Error('Host room failed: ' + await host.locator('#status').innerText());
+                throw new Error('Host room failed: ' + await host.locator('#status').innerText() + ' | ' + diagnostic.join(' | '));
               });
               console.log('Published lobby created a room');
               await guest.getByLabel('Room code').fill(await host.locator('#code').innerText());
               await guest.getByRole('button', { name: 'Join room' }).click();
               await host.getByRole('button', { name: 'Start match' }).waitFor({ timeout: 55000 }).catch(async () => {
-                throw new Error('Join room failed: ' + await guest.locator('#status').innerText());
+                throw new Error('Join room failed: ' + await guest.locator('#status').innerText() + ' | ' + diagnostic.join(' | '));
               });
               console.log('Second browser joined the published room with WebSockets disabled');
             } finally {
